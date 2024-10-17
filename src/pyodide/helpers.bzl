@@ -1,7 +1,6 @@
 load("@aspect_rules_esbuild//esbuild:defs.bzl", "esbuild")
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@bazel_skylib//rules:expand_template.bzl", "expand_template")
-load("@bazel_skylib//rules:write_file.bzl", "write_file")
 load("@capnp-cpp//src/capnp:cc_capnp_library.bzl", "cc_capnp_library")
 load("//:build/capnp_embed.bzl", "capnp_embed")
 load("//:build/js_file.bzl", "js_file")
@@ -20,9 +19,6 @@ def _out_path(name, version):
         res = version + "/" + res
     return res
 
-def _out(src, version):
-    return _out_path(_out_name(src), version)
-
 def _ts_bundle_out(prefix, name, version):
     return ":" + _out_path(prefix + name.removeprefix("internal/").replace("/", "_"), version)
 
@@ -34,15 +30,12 @@ def _copy_to_generated(src, version = None, out_name = None, name = None):
         name += "@" + version
     copy_file(name = name, src = src, out = _out_path(out_name, version))
 
-def _copy_and_capnp_embed(src, version = None, out_name = None):
-    out_name = out_name or _out_name(src)
-    name = out_name + "@capnp"
-    if version:
-        name += "@" + version
-    _copy_to_generated(src, out_name = out_name, version = version)
+def _copy_and_capnp_embed(src):
+    out_name = _out_name(src)
+    _copy_to_generated(src)
     capnp_embed(
-        name = name,
-        src = _out_path(out_name, version),
+        name = out_name + "@capnp",
+        src = _out_path(out_name, None),
         deps = [out_name + "@copy"],
     )
 
@@ -67,7 +60,6 @@ def _fmt_python_snapshot_release(
     return "(%s)" % content
 
 def pyodide_extra():
-    _copy_and_capnp_embed("python-entrypoint.js")
     _copy_to_generated(
         "pyodide_extra.capnp",
         out_name = "pyodide_extra_tmpl.capnp",
@@ -91,12 +83,6 @@ def pyodide_extra():
         template = "generated/pyodide_extra_tmpl.capnp",
     )
 
-    capnp_embed(
-        name = "pyodide_extra_file_embed",
-        src = "generated/pyodide_extra.capnp",
-        deps = ["pyodide_extra_expand_template@rule"],
-    )
-
     for package_date in PYTHON_LOCKFILES:
         _copy_and_capnp_embed("@pyodide-lock_" + package_date + ".json//file")
 
@@ -105,9 +91,6 @@ def pyodide_extra():
         srcs = ["generated/pyodide_extra.capnp"],
         visibility = ["//visibility:public"],
         deps = [
-            ":pyodide_extra_file_embed",
-            ":python-entrypoint.js@capnp",
-        ] + [
             ":pyodide-lock_" + package_date + ".json@capnp"
             for package_date in PYTHON_LOCKFILES.keys()
         ],
