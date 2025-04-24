@@ -354,6 +354,7 @@ struct WorkerdApi::Impl final {
   Impl(jsg::V8System& v8System,
       CompatibilityFlags::Reader featuresParam,
       v8::Isolate::CreateParams createParams,
+      kj::Maybe<v8::IsolateGroup> group,
       kj::Own<JsgIsolateObserver> observerParam,
       api::MemoryCacheProvider& memoryCacheProvider,
       const PythonConfig& pythonConfig = defaultConfig,
@@ -361,7 +362,8 @@ struct WorkerdApi::Impl final {
       : features(capnp::clone(featuresParam)),
         maybeOwnedModuleRegistry(kj::mv(newModuleRegistry)),
         observer(kj::atomicAddRef(*observerParam)),
-        jsgIsolate(v8System, Configuration(*this), kj::mv(observerParam), kj::mv(createParams)),
+        jsgIsolate(
+            v8System, group, Configuration(*this), kj::mv(observerParam), kj::mv(createParams)),
         memoryCacheProvider(memoryCacheProvider),
         pythonConfig(pythonConfig) {
     jsgIsolate.runInLockScope([&](JsgWorkerdIsolate::Lock& lock) {
@@ -427,6 +429,7 @@ struct WorkerdApi::Impl final {
 WorkerdApi::WorkerdApi(jsg::V8System& v8System,
     CompatibilityFlags::Reader features,
     v8::Isolate::CreateParams createParams,
+    kj::Maybe<v8::IsolateGroup> group,
     kj::Own<JsgIsolateObserver> observer,
     api::MemoryCacheProvider& memoryCacheProvider,
     const PythonConfig& pythonConfig,
@@ -434,6 +437,7 @@ WorkerdApi::WorkerdApi(jsg::V8System& v8System,
     : impl(kj::heap<Impl>(v8System,
           features,
           kj::mv(createParams),
+          group,
           kj::mv(observer),
           memoryCacheProvider,
           pythonConfig,

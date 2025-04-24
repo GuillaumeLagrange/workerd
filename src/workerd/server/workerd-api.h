@@ -35,6 +35,7 @@ class WorkerdApi final: public Worker::Api {
   WorkerdApi(jsg::V8System& v8System,
       CompatibilityFlags::Reader features,
       v8::Isolate::CreateParams createParams,
+      kj::Maybe<v8::IsolateGroup> group,
       kj::Own<JsgIsolateObserver> observer,
       api::MemoryCacheProvider& memoryCacheProvider,
       const PythonConfig& pythonConfig,
