@@ -1837,7 +1837,13 @@ class Server::WorkerService final: public Service,
   void link() override {
     LinkCallback callback =
         kj::mv(KJ_REQUIRE_NONNULL(ioChannels.tryGet<LinkCallback>(), "already called link()"));
-    ioChannels = callback(*this);
+    auto linked = callback(*this);
+
+    for (auto& ns: actorNamespaces) {
+      ns.value->link(linked.actorStorage, linked.alarmScheduler);
+    }
+
+    ioChannels = kj::mv(linked);
   }
 
   void unlink() override {
@@ -1981,6 +1987,13 @@ class Server::WorkerService final: public Service,
         : actorClass(kj::mv(actorClass)),
           config(config),
           timer(timer) {}
+
+    // Called at link time to provide needed resources.
+    void link(
+        kj::Maybe<SqliteDatabase::Vfs&> actorStorage, kj::Maybe<AlarmScheduler&> alarmScheduler) {
+      this->actorStorage = actorStorage;
+      this->alarmScheduler = alarmScheduler;
+    }
 
     const ActorConfig& getConfig() {
       return config;
@@ -2218,25 +2231,27 @@ class Server::WorkerService final: public Service,
         // TODO(now): Refactor to use parent.actorClass->newActor() so that we don't directly
         //   access the `service`.
         auto [service, className] = parent.actorClass->getServiceAndClassName();
-        auto& channels = KJ_ASSERT_NONNULL(service.ioChannels.tryGet<LinkedIoChannels>());
-        kj::Maybe<SqliteDatabase::Vfs&> actorStorage = channels.actorStorage;
-        AlarmScheduler& alarmScheduler = channels.alarmScheduler;
 
         // Just in case abort() was called concurrently...
         requireNotBroken();
 
-        auto makeActorCache = [this, idStr = kj::str(key), actorStorage, &alarmScheduler](
-                                  const ActorCache::SharedLru& sharedLru, OutputGate& outputGate,
-                                  ActorCache::Hooks& hooks,
+        auto makeActorCache = [this, idStr = kj::str(key)](const ActorCache::SharedLru& sharedLru,
+                                  OutputGate& outputGate, ActorCache::Hooks& hooks,
                                   SqliteObserver& sqliteObserver) mutable {
           return parent.config.tryGet<Durable>().map(
               [&](const Durable& d) -> kj::Own<ActorCacheInterface> {
-            KJ_IF_SOME(as, actorStorage) {
+            KJ_IF_SOME(as, parent.actorStorage) {
               kj::Path path({d.uniqueKey, kj::str(idStr, ".sqlite")});
 
-              auto sqliteHooks = kj::heap<ActorSqliteHooks>(
-                  alarmScheduler, ActorKey{.uniqueKey = d.uniqueKey, .actorId = idStr})
-                                     .attach(kj::mv(idStr));
+              kj::Own<ActorSqlite::Hooks> sqliteHooks;
+              KJ_IF_SOME(a, parent.alarmScheduler) {
+                sqliteHooks = kj::heap<ActorSqliteHooks>(
+                    a, ActorKey{.uniqueKey = d.uniqueKey, .actorId = idStr})
+                                  .attach(kj::mv(idStr));
+              } else {
+                // No alarm scheduler available, use default hooks instance.
+                sqliteHooks = fakeOwn(ActorSqlite::Hooks::getDefaultHooks());
+              }
 
               auto db = kj::heap<SqliteDatabase>(as, kj::mv(path),
                   kj::WriteMode::CREATE | kj::WriteMode::MODIFY | kj::WriteMode::CREATE_PARENT);
@@ -2331,6 +2346,8 @@ class Server::WorkerService final: public Service,
     kj::HashMap<kj::StringPtr, kj::Own<ActorContainer>> actors;
     kj::Maybe<kj::Promise<void>> cleanupTask;
     kj::Timer& timer;
+    kj::Maybe<SqliteDatabase::Vfs&> actorStorage;
+    kj::Maybe<AlarmScheduler&> alarmScheduler;
 
     // Removes actors from `actors` after 70 seconds of last access.
     kj::Promise<void> cleanupLoop() {
