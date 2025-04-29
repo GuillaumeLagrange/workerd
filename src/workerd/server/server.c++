@@ -2022,6 +2022,9 @@ class Server::WorkerService final: public Service,
       return kj::heap<ActorChannelImpl>(getActorContainer(kj::mv(id)));
     }
 
+    class ActorContainer;
+    using ActorMap = kj::HashMap<kj::StringPtr, kj::Own<ActorContainer>>;
+
     // ActorContainer mostly serves as a wrapper around Worker::Actor.
     // We use it to associate a HibernationManager with the Worker::Actor, since the
     // Worker::Actor can be destroyed during periods of prolonged inactivity.
@@ -2034,12 +2037,14 @@ class Server::WorkerService final: public Service,
      public:
       ActorContainer(kj::String key,
           Worker::Actor::Id id,
-          ActorNamespace& parent,
+          ActorNamespace& ns,
+          kj::Maybe<ActorContainer&> parent,
           kj::Own<ActorClass> actorClass,
           kj::Timer& timer)
           : key(kj::mv(key)),
             id(kj::mv(id)),
             tracker(kj::refcounted<RequestTracker>(*this)),
+            ns(ns),
             parent(parent),
             actorClass(kj::mv(actorClass)),
             timer(timer),
@@ -2048,6 +2053,10 @@ class Server::WorkerService final: public Service,
       ~ActorContainer() noexcept(false) {
         // Shutdown the tracker so we don't use active/inactive hooks anymore.
         tracker->shutdown();
+
+        for (auto& facet: facets) {
+          facet.value->abort(kj::none);
+        }
 
         KJ_IF_SOME(a, actor) {
           // Unknown broken reason.
@@ -2064,7 +2073,7 @@ class Server::WorkerService final: public Service,
       void inactive() override {
         // Durable objects are evictable by default.
         bool isEvictable = true;
-        KJ_SWITCH_ONEOF(parent.config) {
+        KJ_SWITCH_ONEOF(ns.config) {
           KJ_CASE_ONEOF(c, Durable) {
             isEvictable = c.isEvictable;
           }
@@ -2097,6 +2106,9 @@ class Server::WorkerService final: public Service,
       }
       void updateAccessTime() {
         lastAccess = timer.now();
+        KJ_IF_SOME(p, parent) {
+          p.updateAccessTime();
+        }
       }
       kj::TimePoint getLastAccess() {
         return lastAccess;
@@ -2105,7 +2117,11 @@ class Server::WorkerService final: public Service,
       bool hasClients() {
         // If anyone holds a reference to the container other than the actor map, then it must be
         // a client.
-        return isShared();
+        if (isShared()) return true;
+        for (auto& facet: facets) {
+          if (facet.value->hasClients()) return true;
+        }
+        return false;
       }
       kj::Own<ActorContainer> addRef() {
         return kj::addRef(*this);
@@ -2126,9 +2142,9 @@ class Server::WorkerService final: public Service,
           IoChannelFactory::SubrequestMetadata metadata) {
         auto actor = co_await getActor();
 
-        if (parent.cleanupTask == kj::none) {
+        if (ns.cleanupTask == kj::none) {
           // Need to start the cleanup loop.
-          parent.cleanupTask = parent.cleanupLoop();
+          ns.cleanupTask = ns.cleanupLoop();
         }
 
         co_return actorClass->startRequest(kj::mv(metadata), kj::mv(actor))
@@ -2141,6 +2157,10 @@ class Server::WorkerService final: public Service,
         KJ_IF_SOME(a, actor) {
           // Unknown broken reason.
           a->shutdown(0, reason);
+        }
+
+        for (auto& facet: facets) {
+          facet.value->abort(reason);
         }
 
         onBrokenTask = kj::none;
@@ -2157,6 +2177,18 @@ class Server::WorkerService final: public Service,
         }
       }
 
+      kj::Own<ActorContainer> getFacet(
+          kj::String childKey, Worker::Actor::Id childId, kj::Own<ActorClass> childActorClass) {
+        return facets
+            .findOrCreate(childKey, [&]() mutable {
+          auto container = kj::refcounted<ActorContainer>(
+              kj::mv(childKey), kj::mv(childId), ns, *this, kj::mv(childActorClass), timer);
+
+          return kj::HashMap<kj::StringPtr, kj::Own<ActorContainer>>::Entry{
+            container->getKey(), kj::mv(container)};
+        })->addRef();
+      }
+
      private:
       // The actor is constructed after the ActorContainer so it starts off empty.
       kj::Maybe<kj::Own<Worker::Actor>> actor;
@@ -2164,7 +2196,8 @@ class Server::WorkerService final: public Service,
       kj::String key;
       Worker::Actor::Id id;
       kj::Own<RequestTracker> tracker;
-      ActorNamespace& parent;
+      ActorNamespace& ns;
+      kj::Maybe<ActorContainer&> parent;
       kj::Own<ActorClass> actorClass;
       kj::Timer& timer;
       kj::TimePoint lastAccess;
@@ -2172,6 +2205,8 @@ class Server::WorkerService final: public Service,
       kj::Maybe<kj::Promise<void>> shutdownTask;
       kj::Maybe<kj::Promise<void>> onBrokenTask;
       kj::Maybe<kj::Exception> brokenReason;
+
+      ActorMap facets;
 
       void requireNotBroken() {
         KJ_IF_SOME(e, brokenReason) {
@@ -2189,6 +2224,10 @@ class Server::WorkerService final: public Service,
           brokenReason = kj::getCaughtExceptionAsKj();
         }
 
+        for (auto& facet: facets) {
+          facet.value->abort(brokenReason);
+        }
+
         // HACK: Dropping the ActorContainer will delete onBrokenTask, cancelling ourselves. This
         //   would crash. To avoid the problem, detach ourselves. This is safe because we know that
         //   once we return there's nothing left for this promise to do anyway.
@@ -2203,7 +2242,11 @@ class Server::WorkerService final: public Service,
 
         // Note that we remove the entire ActorContainer from the map -- this drops the
         // HibernationManager so any connected hibernatable websockets will be disconnected.
-        parent.actors.erase(key);
+        KJ_IF_SOME(p, parent) {
+          p.facets.erase(key);
+        } else {
+          ns.actors.erase(key);
+        }
 
         // WARNING: `this` MAY HAVE BEEN DELETED
       }
@@ -2254,16 +2297,17 @@ class Server::WorkerService final: public Service,
       void start() {
         KJ_REQUIRE(actor == nullptr);
 
+        // TODO(now): Compute correct name for facet storage.
         auto makeActorCache = [this, idStr = kj::str(key)](const ActorCache::SharedLru& sharedLru,
                                   OutputGate& outputGate, ActorCache::Hooks& hooks,
                                   SqliteObserver& sqliteObserver) mutable {
-          return parent.config.tryGet<Durable>().map(
+          return ns.config.tryGet<Durable>().map(
               [&](const Durable& d) -> kj::Own<ActorCacheInterface> {
-            KJ_IF_SOME(as, parent.actorStorage) {
+            KJ_IF_SOME(as, ns.actorStorage) {
               kj::Path path({d.uniqueKey, kj::str(idStr, ".sqlite")});
 
               kj::Own<ActorSqlite::Hooks> sqliteHooks;
-              KJ_IF_SOME(a, parent.alarmScheduler) {
+              KJ_IF_SOME(a, ns.alarmScheduler) {
                 sqliteHooks = kj::heap<ActorSqliteHooks>(
                     a, ActorKey{.uniqueKey = d.uniqueKey, .actorId = idStr})
                                   .attach(kj::mv(idStr));
@@ -2277,6 +2321,8 @@ class Server::WorkerService final: public Service,
 
               // Before we do anything, make sure the database is in WAL mode. We also need to
               // do this after reset() is used, so register a callback for that.
+              // TODO(now): We should also delete all child facets when a deleteAll() is performed,
+              //   which we can detect via the afterReset callback.
               auto setWalMode = [](SqliteDatabase& db) { db.run("PRAGMA journal_mode=WAL;"); };
               setWalMode(*db);
               db->afterReset(kj::mv(setWalMode));
@@ -2294,7 +2340,7 @@ class Server::WorkerService final: public Service,
         };
 
         bool enableSql = true;
-        KJ_SWITCH_ONEOF(parent.config) {
+        KJ_SWITCH_ONEOF(ns.config) {
           KJ_CASE_ONEOF(c, Durable) {
             enableSql = c.enableSql;
           }
@@ -2336,7 +2382,7 @@ class Server::WorkerService final: public Service,
       return actors
           .findOrCreate(key, [&]() mutable {
         auto container = kj::refcounted<ActorContainer>(
-            kj::mv(key), kj::mv(id), *this, kj::addRef(*actorClass), timer);
+            kj::mv(key), kj::mv(id), *this, kj::none, kj::addRef(*actorClass), timer);
 
         return kj::HashMap<kj::StringPtr, kj::Own<ActorContainer>>::Entry{
           container->getKey(), kj::mv(container)};
@@ -2356,7 +2402,7 @@ class Server::WorkerService final: public Service,
     // If the actor is broken, we remove it from the map. However, if it's just evicted due to
     // inactivity, we keep the ActorContainer in the map but drop the Own<Worker::Actor>. When a new
     // request comes in, we recreate the Own<Worker::Actor>.
-    kj::HashMap<kj::StringPtr, kj::Own<ActorContainer>> actors;
+    ActorMap actors;
     kj::Maybe<kj::Promise<void>> cleanupTask;
     kj::Timer& timer;
     kj::Maybe<SqliteDatabase::Vfs&> actorStorage;
@@ -2366,28 +2412,35 @@ class Server::WorkerService final: public Service,
     kj::Promise<void> cleanupLoop() {
       constexpr auto EXPIRATION = 70 * kj::SECONDS;
 
+      // Don't bother running the loop if the config doesn't allow eviction.
+      KJ_SWITCH_ONEOF(config) {
+        KJ_CASE_ONEOF(c, Durable) {
+          if (!c.isEvictable) co_return;
+        }
+        KJ_CASE_ONEOF(c, Ephemeral) {
+          if (!c.isEvictable) co_return;
+        }
+      }
+
       while (true) {
         auto now = timer.now();
         actors.eraseAll([&](auto&, kj::Own<ActorContainer>& entry) {
-          // Durable Objects are evictable by default.
-          bool isEvictable = true;
-          KJ_SWITCH_ONEOF(config) {
-            KJ_CASE_ONEOF(c, Durable) {
-              isEvictable = c.isEvictable;
-            }
-            KJ_CASE_ONEOF(c, Ephemeral) {
-              isEvictable = c.isEvictable;
-            }
-          }
-          if (entry->hasClients() || !isEvictable) {
-            // We are still using the actor so we cannot remove it, or this actor cannot be evicted.
+          // Check getLastAccess() before hasClients() since it's faster.
+          if ((now - entry->getLastAccess()) <= EXPIRATION) {
+            // Used recently; don't evict.
             return false;
           }
 
-          return (now - entry->getLastAccess()) > EXPIRATION;
+          if (entry->hasClients()) {
+            // There's still an active client; don't evict.
+            return false;
+          }
+
+          // No clients and not used in a while, evict this actor.
+          return true;
         });
 
-        co_await timer.afterDelay(EXPIRATION).eagerlyEvaluate(nullptr);
+        co_await timer.atTime(now + EXPIRATION);
       }
     }
 
