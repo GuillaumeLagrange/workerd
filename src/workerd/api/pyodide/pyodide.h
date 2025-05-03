@@ -280,30 +280,34 @@ struct MemorySnapshotResult {
   JSG_STRUCT(snapshot, importedModulesList);
 };
 
+// This used to be declared nested as ArtifactBundler::State, but then there was a need to
+// forward-declare it, so here we are.
+struct ArtifactBundler_State: public kj::Refcounted {
+  kj::Maybe<const PyodidePackageManager&> packageManager;
+  // ^ lifetime should be contained by lifetime of ArtifactBundler since there is normally one worker set for the whole process. see worker-set.h
+  // In other words:
+  // WorkerSet lifetime = PackageManager lifetime and Worker lifetime = ArtifactBundler lifetime and WorkerSet owns and will outlive Worker, so PackageManager outlives ArtifactBundler
+  kj::Maybe<MemorySnapshotResult> storedSnapshot;
+
+  // A memory snapshot of the state of the Python interpreter after initialization. Used to speed
+  // up cold starts.
+  kj::Maybe<kj::Array<const kj::byte>> existingSnapshot;
+  bool isValidating;
+
+  ArtifactBundler_State(kj::Maybe<const PyodidePackageManager&> packageManager,
+      kj::Maybe<kj::Array<const kj::byte>> existingSnapshot,
+      bool isValidating = false)
+      : packageManager(packageManager),
+        storedSnapshot(kj::none),
+        existingSnapshot(kj::mv(existingSnapshot)),
+        isValidating(isValidating) {};
+};
+
 // A loaded bundle of artifacts for a particular script id. It can also contain V8 version and
 // CPU architecture-specific artifacts. The logic for loading these is in getArtifacts.
 class ArtifactBundler: public jsg::Object {
  public:
-  struct State: public kj::Refcounted {
-    kj::Maybe<const PyodidePackageManager&> packageManager;
-    // ^ lifetime should be contained by lifetime of ArtifactBundler since there is normally one worker set for the whole process. see worker-set.h
-    // In other words:
-    // WorkerSet lifetime = PackageManager lifetime and Worker lifetime = ArtifactBundler lifetime and WorkerSet owns and will outlive Worker, so PackageManager outlives ArtifactBundler
-    kj::Maybe<MemorySnapshotResult> storedSnapshot;
-
-    // A memory snapshot of the state of the Python interpreter after initialization. Used to speed
-    // up cold starts.
-    kj::Maybe<kj::Array<const kj::byte>> existingSnapshot;
-    bool isValidating;
-
-    State(kj::Maybe<const PyodidePackageManager&> packageManager,
-        kj::Maybe<kj::Array<const kj::byte>> existingSnapshot,
-        bool isValidating = false)
-        : packageManager(packageManager),
-          storedSnapshot(kj::none),
-          existingSnapshot(kj::mv(existingSnapshot)),
-          isValidating(isValidating) {};
-  };
+  using State = ArtifactBundler_State;
 
   ArtifactBundler(kj::Own<State> inner): inner(kj::mv(inner)) {};
 
