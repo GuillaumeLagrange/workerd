@@ -64,6 +64,8 @@ class WorkerdApi final: public Worker::Api {
       config::Worker::Reader conf,
       Worker::ValidationErrorReporter& errorReporter);
 
+  void compileModules(jsg::Lock& lock, const Worker::Script::ModulesSource& source) const override;
+
   // A pipeline-level binding.
   struct Global {
     // TODO(cleanup): Get rid of this and just load from config.Worker.bindings capnp structure
@@ -242,13 +244,22 @@ class WorkerdApi final: public Worker::Api {
       config::Worker::Module::Reader conf,
       jsg::CompilationObserver& observer,
       CompatibilityFlags::Reader featureFlags);
+  static kj::Maybe<jsg::ModuleRegistry::ModuleInfo> tryCompileModule(jsg::Lock& js,
+      const Worker::Script::Module& module,
+      jsg::CompilationObserver& observer,
+      CompatibilityFlags::Reader featureFlags);
+
+  // Convert a module definition from workerd config to a Worker::Script::Module (which may contain
+  // string pointers into the config).
+  static Worker::Script::Module readModuleConf(config::Worker::Module::Reader conf,
+      kj::Maybe<Worker::ValidationErrorReporter&> errorReporter = kj::none);
 
   using ModuleFallbackCallback = Worker::Api::ModuleFallbackCallback;
   void setModuleFallbackCallback(kj::Function<ModuleFallbackCallback>&& callback) const override;
 
   static kj::Own<jsg::modules::ModuleRegistry> initializeBundleModuleRegistry(
       const jsg::ResolveObserver& resolveObserver,
-      const config::Worker::Reader& conf,
+      const Worker::Script::ModulesSource& source,
       const CompatibilityFlags::Reader& featureFlags,
       const PythonConfig& pythonConfig);
 
@@ -260,10 +271,6 @@ class WorkerdApi final: public Worker::Api {
       config::Worker::Reader conf,
       Worker::ValidationErrorReporter& errorReporter,
       const jsg::CompilationObserver& observer) const;
-
-  void compileModules(jsg::Lock& lock,
-      config::Worker::Reader conf,
-      Worker::ValidationErrorReporter& errorReporter) const;
 };
 
 kj::Maybe<jsg::Bundle::Reader> fetchPyodideBundle(

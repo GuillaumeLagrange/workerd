@@ -3087,13 +3087,17 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name,
   auto observer = kj::atomicRefcounted<IsolateObserver>();
   auto limitEnforcer = kj::refcounted<NullIsolateLimitEnforcer>();
 
+  auto source = WorkerdApi::extractSource(name, conf, errorReporter);
+
   kj::Maybe<kj::Own<jsg::modules::ModuleRegistry>> newModuleRegistry;
   if (featureFlags.getNewModuleRegistry()) {
     KJ_REQUIRE(experimental,
         "The new ModuleRegistry implementation is an experimental feature. "
         "You must run workerd with `--experimental` to use this feature.");
+    auto& modulesSource = KJ_ASSERT_NONNULL(source.tryGet<Worker::Script::ModulesSource>(),
+        "The new MOduleRegistry only works with ES modules syntax, not Service Workers syntax.");
     newModuleRegistry = WorkerdApi::initializeBundleModuleRegistry(
-        *jsgobserver, conf, featureFlags.asReader(), pythonConfig);
+        *jsgobserver, modulesSource, featureFlags.asReader(), pythonConfig);
   }
 
   auto api = kj::heap<WorkerdApi>(globalContext->v8System, featureFlags.asReader(), extensions,
@@ -3277,8 +3281,8 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name,
     });
   }
 
-  auto script = isolate->newScript(name, WorkerdApi::extractSource(name, conf, errorReporter),
-      IsolateObserver::StartType::COLD, false, errorReporter);
+  auto script = isolate->newScript(
+      name, kj::mv(source), IsolateObserver::StartType::COLD, false, errorReporter);
 
   kj::Vector<FutureSubrequestChannel> subrequestChannels;
   kj::Vector<FutureActorChannel> actorChannels;
