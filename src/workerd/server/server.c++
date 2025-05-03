@@ -3096,7 +3096,7 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name,
         *jsgobserver, conf, featureFlags.asReader(), pythonConfig);
   }
 
-  auto api = kj::heap<WorkerdApi>(globalContext->v8System, featureFlags.asReader(),
+  auto api = kj::heap<WorkerdApi>(globalContext->v8System, featureFlags.asReader(), extensions,
       limitEnforcer->getCreateParams(), kj::mv(jsgobserver), *memoryCacheProvider, pythonConfig,
       kj::mv(newModuleRegistry));
 
@@ -3277,9 +3277,8 @@ kj::Own<Server::Service> Server::makeWorker(kj::StringPtr name,
     });
   }
 
-  auto script =
-      isolate->newScript(name, WorkerdApi::extractSource(name, conf, errorReporter, extensions),
-          IsolateObserver::StartType::COLD, false, errorReporter);
+  auto script = isolate->newScript(name, WorkerdApi::extractSource(name, conf, errorReporter),
+      IsolateObserver::StartType::COLD, false, errorReporter);
 
   kj::Vector<FutureSubrequestChannel> subrequestChannels;
   kj::Vector<FutureActorChannel> actorChannels;
