@@ -486,6 +486,15 @@ class TypeWrapper: public DynamicResourceTypeMap<Self>,
     return TYPE_HANDLER_INSTANCE<U>;
   }
 
+  template <typename U>
+  kj::Maybe<const TypeHandler<U>&> tryUnwrap(v8::Local<v8::Context> context,
+      v8::Local<v8::Value> handle,
+      TypeHandler<U>*,
+      kj::Maybe<v8::Local<v8::Object>> parentObject) {
+    // TypeHandler is not a value that needs to be unwrapped from JS
+    return TYPE_HANDLER_INSTANCE<U>;
+  }
+
   static constexpr const char* getName(v8::Isolate**) {
     return "Isolate";
   }
@@ -499,6 +508,11 @@ class TypeWrapper: public DynamicResourceTypeMap<Self>,
       v8::Local<v8::Value> handle,
       TypeErrorContext errorContext,
       kj::Maybe<v8::Local<v8::Object>> parentObject = kj::none) -> RemoveRvalueRef<U> {
+    using V = kj::Decay<U>;
+    if constexpr (isValueLessParameter<Self, V>) {
+      // C++ parameters which don't unwrap JS values, like v8::Isolate* and TypeHandlers.
+      return unwrap(context, (V*)nullptr);
+    }
     auto maybe = this->tryUnwrap(context, handle, (kj::Decay<U>*)nullptr, parentObject);
     KJ_IF_SOME(result, maybe) {
       return kj::fwd<RemoveMaybe<decltype(maybe)>>(result);

@@ -360,7 +360,6 @@ struct StaticContext: public ContextGlobalObject {
     }
 
     static void voidCall() {}
-    static void voidCallWithInfo(const v8::FunctionCallbackInfo<v8::Value>& info) {}
 
     static Unimplemented unimplementedStaticMethod() {
       return {};
@@ -372,7 +371,6 @@ struct StaticContext: public ContextGlobalObject {
       JSG_STATIC_METHOD(passThrough);
       JSG_STATIC_METHOD(passThroughWithInfo);
       JSG_STATIC_METHOD(voidCall);
-      JSG_STATIC_METHOD(voidCallWithInfo);
       JSG_STATIC_METHOD_NAMED(delete, delete_);
       JSG_STATIC_METHOD(unimplementedStaticMethod);
     }
@@ -421,7 +419,6 @@ KJ_TEST("Static methods are exposed as constructor properties") {
   e.expectEval("StaticMethods.passThrough(true)", "boolean", "true");
   e.expectEval("StaticMethods.passThroughWithInfo(true)", "boolean", "true");
   e.expectEval("StaticMethods.voidCall(); true;", "boolean", "true");
-  e.expectEval("StaticMethods.voidCallWithInfo(); true;", "boolean", "true");
   e.expectEval("StaticMethods.delete(); true;", "boolean", "true");
   e.expectEval("StaticMethods.unimplementedStaticMethod()", "throws",
       "Error: Failed to execute 'unimplementedStaticMethod' on 'StaticMethods': "
@@ -434,7 +431,6 @@ KJ_TEST("Static methods are not exposed as constructor prototype properties") {
   e.expectEval("typeof StaticMethods.prototype.passThrough === 'undefined'\n"
                "&& typeof StaticMethods.prototype.passThroughWithInfo === 'undefined'\n"
                "&& typeof StaticMethods.prototype.voidCall === 'undefined'\n"
-               "&& typeof StaticMethods.prototype.voidCallWithInfo === 'undefined'\n"
                "&& typeof StaticMethods.prototype.delete === 'undefined'\n"
                "&& typeof StaticMethods.prototype.unimplementedStaticMethod === 'undefined'",
       "boolean", "true");
@@ -445,7 +441,6 @@ KJ_TEST("Static methods are not exposed as object instance properties") {
                "typeof obj.passThrough === 'undefined'\n"
                "&& typeof obj.passThroughWithInfo === 'undefined'\n"
                "&& typeof obj.voidCall === 'undefined'\n"
-               "&& typeof obj.voidCallWithInfo === 'undefined'\n"
                "&& typeof obj.delete === 'undefined'\n"
                "&& typeof obj.unimplementedStaticMethod === 'undefined'",
       "boolean", "true");
@@ -456,7 +451,6 @@ KJ_TEST("Static methods are not exposed as object instance prototype properties"
                "typeof objProto.passThrough === 'undefined'\n"
                "&& typeof objProto.passThroughWithInfo === 'undefined'\n"
                "&& typeof objProto.voidCall === 'undefined'\n"
-               "&& typeof objProto.voidCallWithInfo === 'undefined'\n"
                "&& typeof objProto.delete === 'undefined'\n"
                "&& typeof objProto.unimplementedStaticMethod === 'undefined'",
       "boolean", "true");
@@ -559,15 +553,9 @@ struct InjectLockContext: public ContextGlobalObject {
       this->val = val;
     }
 
-    static int borf(Lock& js, int val, v8::Isolate* v8Isolate) {
-      KJ_ASSERT(js.v8Isolate == v8Isolate);
-      return val * 2;
-    }
-
     JSG_RESOURCE_TYPE(Thingy) {
       JSG_METHOD(frob);
       JSG_PROTOTYPE_PROPERTY(val, getVal, setVal);
-      JSG_STATIC_METHOD(borf);
     }
   };
 
