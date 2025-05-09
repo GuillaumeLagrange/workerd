@@ -35,7 +35,7 @@ import %workspace%/build/lint.bazelrc
 build --nolegacy_external_runfiles
 
 # Flip this early to avoid breaking compatibility once it becomes the default.
-build --incompatible_disallow_empty_glob
+# build --incompatible_disallow_empty_glob
 
 # Prevents bazel cache invalidation when switching terminals
 build --incompatible_strict_action_env

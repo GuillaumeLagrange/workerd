@@ -55,6 +55,14 @@ http_archive(
 
 load("@rules_python//python:repositories.bzl", "py_repositories", "python_register_toolchains")
 
+http_archive(
+    name = "codspeed_cpp", # Name the codspeed_cpp will be imported as
+
+    # Target the main branch automatically, or select a specific version
+    urls = ["https://github.com/CodSpeedHQ/codspeed-cpp/archive/refs/heads/main.zip"],
+    strip_prefix = "codspeed-cpp-main",
+)
+
 py_repositories()
 
 # These are part of what's needed to get `bazel query 'deps(//...)'`, to work, but this is difficult to support
