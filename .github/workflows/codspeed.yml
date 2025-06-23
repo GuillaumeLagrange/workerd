@@ -1,0 +1,78 @@
+name: CodSpeed
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - 'justfile'
+      - '.devcontainer'
+      - '**/*.md'
+      - '.gitignore'
+  merge_group:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: codspeed.yml-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  # Write cache
+  contents: write
+
+jobs:
+  benchmarks:
+    name: Run benchmarks
+    runs-on: ubuntu-22.04
+    env:
+      BAZEL_ARGS: --config=benchmark --@codspeed//core:codspeed_mode=instrumentation --remote_cache=https://bazel:${{ secrets.BAZEL_CACHE_KEY }}@bazel-remote-cache.devprod.cloudflare.dev
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+
+      - name: Cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ~/bazel-disk-cache
+          key: bazel-disk-cache-benchmarks-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.bazelversion', '.bazelrc', 'WORKSPACE') }}
+
+      - name: Setup Linux
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          wget https://apt.llvm.org/llvm.sh
+          sed -i '/apt-get install/d' llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 19
+          # keep in sync with build/ci.bazelrc
+          sudo apt-get install -y -qq --no-install-recommends clang-19 lld-19 libunwind-19 libc++abi1-19 libc++1-19 libc++-19-dev libclang-rt-19-dev llvm-19
+          sudo ln -s /usr/bin/llvm-symbolizer-19 /usr/bin/llvm-symbolizer
+          echo "build:linux --action_env=CC=/usr/lib/llvm-19/bin/clang" >> .bazelrc
+          echo "build:linux --host_action_env=CC=/usr/lib/llvm-19/bin/clang" >> .bazelrc
+
+      - name: Build benchmarks
+        run: |
+          bazel build ${{ env.BAZEL_ARGS }} //src/workerd/tests:all_benchmarks
+
+      - name: Generate benchmark script
+        run: |
+          echo '#!/bin/bash' > run_benchmarks.sh
+          echo 'set -e' >> run_benchmarks.sh
+          targets=$(bazel query 'deps(//src/workerd/tests:all_benchmarks, 1)' --output=label 2>/dev/null | grep -E '^//src/workerd/tests:bench-' | grep -v '@')
+          for target in $targets; do
+            # Get the binary path for each benchmark target
+            binary_path=$(bazel cquery ${{ env.BAZEL_ARGS }} --output=files "$target")
+            echo "echo 'Running benchmark: $target'" >> run_benchmarks.sh
+            echo "$binary_path" >> run_benchmarks.sh
+          done
+          chmod +x run_benchmarks.sh
+
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@v3
+        with:
+          run: ./run_benchmarks.sh
+
+      - name: Bazel shutdown
+        run: bazel shutdown
