@@ -3,9 +3,16 @@ load("//:build/wd_cc_benchmark.bzl", "wd_cc_benchmark")
 load("//:build/wd_cc_library.bzl", "wd_cc_library")
 load("//:build/wd_test.bzl", "wd_test")
 
-wd_cc_library(
+cc_library(
     name = "bench-tools",
     hdrs = ["bench-tools.h"],
+    strip_include_prefix = "/src",
+    target_compatible_with = select({
+        # Do not build benchmarks on Windows.
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "@//build/config:no_build": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         "@capnp-cpp//src/kj:kj-test",
