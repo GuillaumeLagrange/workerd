@@ -25,12 +25,17 @@ def wd_cc_benchmark(
         }),
         visibility = visibility,
         deps = deps + [
-            "@com_google_benchmark//:benchmark_main",
+            "@codspeed//google_benchmark:benchmark_main",
             "//src/workerd/tests:bench-tools",
         ],
         # use the same malloc we use for server
         malloc = "//src/workerd/server:malloc",
         tags = ["benchmark"],
+        target_compatible_with = select({
+            # Do not build benchmarks on Windows.
+            "@platforms//os:windows": ["@platforms//:incompatible"],
+            "//conditions:default": [],
+        }),
         **kwargs
     )
 
