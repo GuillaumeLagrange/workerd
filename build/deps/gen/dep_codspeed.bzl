@@ -3,9 +3,9 @@
 load("@//:build/http.bzl", "http_archive")
 
 TAG_NAME = "v1.1.1"
-URL = "https://api.github.com/repos/CodSpeedHQ/codspeed-cpp/tarball/v1.1.1"
-STRIP_PREFIX = "CodSpeedHQ-codspeed-cpp-5324618"
-SHA256 = "1d82b0d519d07ab3582078385831f580d0b111a9ee219c21cd4a1eba8adb2580"
+URL = "https://api.github.com/repos/CodSpeedHQ/codspeed-cpp/tarball/cod-1033-doesnt-build-on-windows"
+STRIP_PREFIX = "CodSpeedHQ-codspeed-cpp-5fa0322"
+SHA256 = "09b4bff67c9616e4e7c33b5d47b3f7cbd3f35557e45e50b05cb96e9d94065ad1"
 TYPE = "tgz"
 
 def dep_codspeed():
